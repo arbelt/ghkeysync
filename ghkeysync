@@ -1,0 +1,127 @@
+#!/usr/bin/env perl
+
+use v5.20;
+use autodie;
+use Getopt::Long;
+use Pod::Usage;
+use Data::Dumper;
+use File::Temp qw(tempfile);
+use File::Copy qw(move);
+
+my @users;
+my $auth_keys_file = "";
+my $gh_user = "";
+my $commentid = "ghkeysync";
+my $help = 0;
+my $purge = 0;
+
+
+GetOptions('user=s@' => \@users,
+           'file=s' => \$auth_keys_file,
+           'comment=s' => \$commentid,
+           'purge' => \$purge,
+           'help|?' => \$help
+    );
+
+pod2usage(1) if $help;
+
+die "Must specify Github user" unless scalar @users || $purge;
+
+if ($commentid =~ /^\s*$/) {
+  print STDERR "Comment identifier cannot be blank. Using default 'ghkeysync'\n";
+  $commentid = "ghkeysync"
+}
+
+my $cpat = qr/\Q$commentid\E:(?<user>\S+)\s*.*?/;
+my $opat = qr/(?<comment>.*?)\s*/;
+my $com = qr/(?<fullcomment>$cpat|$opat)/;
+
+my $sshkey = qr/^(?<algo>ssh-\S+)\s+(?<key>\S+)\s*$com$/;
+
+sub gh_keys_for {
+  my $user = shift;
+  open my $ghkeys_fh, '-|', qq(curl -s https://github.com/$user.keys);
+  my @ghkeys;
+  while (<$ghkeys_fh>) {
+    chomp;
+    if (/$sshkey/) { push @ghkeys, $_ }
+    else { die "Invalid response.\n" }
+  }
+  return my @result = do {
+    scalar @ghkeys ?
+      ( $user, \@ghkeys )
+      : ()
+  };
+}
+
+my %gh_keys = map { &gh_keys_for($_) } @users;
+
+my %current_keys;
+
+sub get_keys_from_file {
+  no autodie;
+  my ($filename) = shift;
+  open my $fh, "<", $filename or warn "Unable to open: $filename.";
+  while (<$fh>) {
+    chomp;
+    if (/^(?<algo>ssh-\S+)\s+(?<key>\S+)\s*$com$/) {
+      my $hk = "$+{algo} $+{key}";
+      push @{$current_keys{$hk}}, $+{fullcomment}
+        if !$+{user} || (!$gh_keys{$+{user}} && !$purge)
+    }
+  }
+}
+
+# my $infile = $auth_keys_file eq '-' ? "/dev/null" : $auth_keys_file;
+my $outfile = $auth_keys_file;
+
+&get_keys_from_file($auth_keys_file);
+
+sub keys_to_add {
+  my ($user) = @_;
+  map { "$_ $commentid:$user" }
+    grep { ! $current_keys{$_} }
+    @{$gh_keys{$user}}
+}
+
+my @new_keys = map { keys_to_add($_) } keys %gh_keys;
+
+my @all_keys = (@new_keys,
+                map {
+                  my $c = $current_keys{$_}[0];
+                  $c ? "$_ $c" : $_
+                } keys %current_keys);
+
+print STDERR "Adding ", scalar @new_keys, " new keys...\n";
+
+my ($fh, $fname) = tempfile();
+binmode($fh, ":utf8");
+chmod 0644, $fh;
+
+foreach (@all_keys) { print $fh $_, "\n" }
+
+close $fh or warn "Problem closing file...\n";
+
+move $fname, $outfile or warn "Problem replacing file $outfile\n";
+
+
+__END__
+
+=pod
+
+=head1 NAME
+
+ghkeysync - Fetch SSH keys from Github and sync with authorized_keys
+
+=head1 SYNOPSIS
+
+ghkeysync [options]
+
+  Options:
+    -help       show help
+    -user       Github username (required)
+    -file       SSH authorized_keys file to update (`-` to output keys to STDOUT)
+    -comment    Comment for managed keys (default `ghkeysync`)
+    -purge      Purge keys tagged with comment not belonging to users specified on command line
+
+=cut
