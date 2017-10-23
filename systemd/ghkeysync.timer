@@ -1,0 +1,10 @@
+[Unit]
+Description=Run ghkeysync every 5min
+
+[Timer]
+OnCalendar=*:0/5
+OnActiveSec=10s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

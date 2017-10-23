@@ -4,7 +4,7 @@ use v5.20;
 use autodie;
 use Getopt::Long;
 use Pod::Usage;
-use Data::Dumper;
+# use Data::Dumper;
 use File::Temp qw(tempfile);
 use File::Copy qw(move);
 
@@ -15,13 +15,12 @@ my $commentid = "ghkeysync";
 my $help = 0;
 my $purge = 0;
 
-
 GetOptions('user=s@' => \@users,
            'file=s' => \$auth_keys_file,
            'comment=s' => \$commentid,
            'purge' => \$purge,
            'help|?' => \$help
-    );
+          );
 
 pod2usage(1) if $help;
 
@@ -54,21 +53,28 @@ sub gh_keys_for {
   };
 }
 
+
 my %gh_keys = map { &gh_keys_for($_) } @users;
 
 my %current_keys;
+my %managed_keys;
 
 sub get_keys_from_file {
   no autodie;
   my ($filename) = shift;
+  return unless -r $filename;
   open my $fh, "<", $filename or warn "Unable to open: $filename.";
   while (<$fh>) {
     chomp;
     if (/^(?<algo>ssh-\S+)\s+(?<key>\S+)\s*$com$/) {
       my $hk = "$+{algo} $+{key}";
       push @{$current_keys{$hk}}, $+{fullcomment}
-        if !$+{user} || (!$gh_keys{$+{user}} && !$purge)
+        if !$+{user};
+      $managed_keys{$+{user}}++ if $+{user}
     }
+  }
+  foreach (keys %managed_keys) {
+    say "Found $managed_keys{$_} managed keys for user $_"
   }
 }
 
@@ -94,15 +100,32 @@ my @all_keys = (@new_keys,
 
 print STDERR "Adding ", scalar @new_keys, " new keys...\n";
 
-my ($fh, $fname) = tempfile();
-binmode($fh, ":utf8");
-chmod 0644, $fh;
+sub write_keys {
+  my ($outfile, $keysref) = @_;
+  my @keys = @$keysref;
+  my $fh;
+  my $filename;
+  if (-f $outfile) {
+    ($fh, $filename) = tempfile();
+  } else {
+    open $fh, ">", $outfile;
+    $filename = $outfile;
+  }
+  binmode($fh, ":utf8");
+  chmod 0644, $fh;
+  foreach (@keys) { print $fh $_, "\n"}
+  close $fh;
+  if ($filename ne $outfile) {
+    move $filename, $outfile
+      or warn "Problem moving file from $filename to $outfile\n"
+  }
+}
 
-foreach (@all_keys) { print $fh $_, "\n" }
-
-close $fh or warn "Problem closing file...\n";
-
-move $fname, $outfile or warn "Problem replacing file $outfile\n";
+if ( $auth_keys_file && $auth_keys_file ne '-' ) {
+  write_keys($auth_keys_file, \@all_keys)
+} else {
+  foreach (@all_keys) { say }
+}
 
 
 __END__

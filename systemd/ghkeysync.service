@@ -1,0 +1,8 @@
+[Unit]
+Description=Fetch Github keys
+After=multi-user.target
+
+[Service]
+User=ubuntu
+Type=oneshot
+ExecStart=/usr/local/sbin/ghkeysync -f /home/ubuntu/.ssh/authorized_keys -u arbelt
